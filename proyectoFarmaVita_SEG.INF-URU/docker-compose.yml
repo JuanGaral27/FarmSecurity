@@ -1,0 +1,264 @@
+# =====================================================================
+#  FarmaVita - Infraestructura contenerizada (Seguridad Informática URU)
+#  Defensa en profundidad · Microsegmentación · RBAC · Continuidad
+# ---------------------------------------------------------------------
+#  Todo el tráfico entre segmentos atraviesa el firewall perimetral
+#  fw-01 (.254 en cada subred). Las PCs de oficina NO publican puertos
+#  y su ruta por defecto apunta a fw-01.
+# =====================================================================
+
+name: farmavita
+
+services:
+
+  # -------------------------------------------------------------------
+  # FIREWALL PERIMETRAL (nftables) - presente en las 7 subredes
+  # -------------------------------------------------------------------
+  fw-01:
+    build: ./firewall
+    container_name: fw-01
+    hostname: fw-01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.rp_filter=0
+      - net.ipv4.conf.default.rp_filter=0
+    networks:
+      red_dmz:             { ipv4_address: 10.10.20.254 }
+      red_apps:            { ipv4_address: 10.10.30.254 }
+      red_datos:           { ipv4_address: 10.10.40.254 }
+      vlan210_almacen:     { ipv4_address: 10.10.210.254 }
+      vlan220_ventas:      { ipv4_address: 10.10.220.254 }
+      vlan230_admin:       { ipv4_address: 10.10.230.254 }
+      vlan240_laboratorio: { ipv4_address: 10.10.240.254 }
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # VLAN 40 - DATOS (aislada de las oficinas)
+  # -------------------------------------------------------------------
+  farma_db:
+    image: postgres:16-alpine
+    container_name: farma_db
+    hostname: farma_db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    command:
+      - postgres
+      - -c
+      - log_connections=on
+      - -c
+      - log_disconnections=on
+      - -c
+      - password_encryption=scram-sha-256
+    volumes:
+      - farma_db_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      red_datos: { ipv4_address: 10.10.40.10 }
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # VLAN 30 - APLICACIONES (identidades + API)
+  # -------------------------------------------------------------------
+  farma_ldap:
+    image: osixia/openldap:1.5.0
+    container_name: farma_ldap
+    hostname: farma_ldap
+    command: --copy-service
+    environment:
+      LDAP_ORGANISATION: ${LDAP_ORGANISATION}
+      LDAP_DOMAIN: ${LDAP_DOMAIN}
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      LDAP_TLS: "false"
+      LDAP_REMOVE_CONFIG_AFTER_SETUP: "true"
+    volumes:
+      - ./ldap/bootstrap:/container/service/slapd/assets/config/bootstrap/ldif/custom:ro
+      - farma_ldap_data:/var/lib/ldap
+      - farma_ldap_config:/etc/ldap/slapd.d
+    networks:
+      red_apps: { ipv4_address: 10.10.30.30 }
+    restart: unless-stopped
+
+  farma_backend:
+    build: ./backend
+    container_name: farma_backend
+    hostname: farma_backend
+    cap_add:
+      - NET_ADMIN
+    environment:
+      PORT: "3000"
+      DB_HOST: 10.10.40.10
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      LDAP_URL: ldap://farma_ldap:389
+      LDAP_BASE_DN: dc=farmaceutica,dc=local
+      LDAP_ADMIN_DN: cn=admin,dc=farmaceutica,dc=local
+      LDAP_ADMIN_PASSWORD: ${LDAP_ADMIN_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: 8h
+      # Rutas estáticas: la red de datos sólo se alcanza a través de fw-01
+      STATIC_ROUTES: "10.10.40.0/24 via 10.10.30.254"
+    depends_on:
+      fw-01:
+        condition: service_started
+      farma_db:
+        condition: service_healthy
+      farma_ldap:
+        condition: service_started
+    networks:
+      red_apps: { ipv4_address: 10.10.30.20 }
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # VLAN 20 - DMZ (proxy inverso Nginx + frontend React)
+  # -------------------------------------------------------------------
+  farma_proxy:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    container_name: farma_proxy
+    hostname: intranet
+    cap_add:
+      - NET_ADMIN
+    environment:
+      STATIC_ROUTES: "10.10.30.0/24 via 10.10.20.254"
+    ports:
+      - "8080:80"
+    depends_on:
+      - fw-01
+      - farma_backend
+    networks:
+      red_dmz: { ipv4_address: 10.10.20.10 }
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------
+  # OFICINAS (estaciones de trabajo simuladas, sin puertos publicados)
+  # -------------------------------------------------------------------
+  pc_almacen_01:
+    build: ./terminal_almacen
+    container_name: pc_almacen_01
+    hostname: pc-almacen-01
+    cap_add:
+      - NET_ADMIN
+    environment:
+      DEFAULT_GATEWAY: 10.10.210.254
+      FARMA_API_URL: http://10.10.20.10/api
+      FARMA_HOST: intranet.farmaceutica.local
+    stdin_open: true
+    tty: true
+    depends_on:
+      - fw-01
+    networks:
+      vlan210_almacen: { ipv4_address: 10.10.210.10 }
+    restart: unless-stopped
+
+  pc_ventas_01:
+    build: ./oficina
+    container_name: pc_ventas_01
+    hostname: pc-ventas-01
+    cap_add:
+      - NET_ADMIN
+    environment:
+      DEFAULT_GATEWAY: 10.10.220.254
+    stdin_open: true
+    tty: true
+    depends_on:
+      - fw-01
+    networks:
+      vlan220_ventas: { ipv4_address: 10.10.220.10 }
+    restart: unless-stopped
+
+  pc_admin_01:
+    build: ./oficina
+    container_name: pc_admin_01
+    hostname: pc-admin-01
+    cap_add:
+      - NET_ADMIN
+    environment:
+      DEFAULT_GATEWAY: 10.10.230.254
+    stdin_open: true
+    tty: true
+    depends_on:
+      - fw-01
+    networks:
+      vlan230_admin: { ipv4_address: 10.10.230.10 }
+    restart: unless-stopped
+
+  pc_laboratorio_01:
+    build: ./oficina
+    container_name: pc_laboratorio_01
+    hostname: pc-laboratorio-01
+    cap_add:
+      - NET_ADMIN
+    environment:
+      DEFAULT_GATEWAY: 10.10.240.254
+    stdin_open: true
+    tty: true
+    depends_on:
+      - fw-01
+    networks:
+      vlan240_laboratorio: { ipv4_address: 10.10.240.10 }
+    restart: unless-stopped
+
+# =====================================================================
+#  REDES (7 segmentos aislados)
+# =====================================================================
+networks:
+  red_dmz:
+    name: red_dmz
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.20.0/24
+  red_apps:
+    name: red_apps
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.30.0/24
+  red_datos:
+    name: red_datos
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.40.0/24
+  vlan210_almacen:
+    name: vlan210_almacen
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.210.0/24
+  vlan220_ventas:
+    name: vlan220_ventas
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.220.0/24
+  vlan230_admin:
+    name: vlan230_admin
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.230.0/24
+  vlan240_laboratorio:
+    name: vlan240_laboratorio
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.240.0/24
+
+volumes:
+  farma_db_data:
+  farma_ldap_data:
+  farma_ldap_config:

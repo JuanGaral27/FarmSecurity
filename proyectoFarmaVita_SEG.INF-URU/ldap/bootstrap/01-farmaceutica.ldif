@@ -1,0 +1,105 @@
+# =====================================================================
+#  FarmaVita · Directorio corporativo (dc=farmaceutica,dc=local)
+#  Carga inicial automática (osixia/openldap --copy-service)
+# =====================================================================
+
+# --- Unidades organizativas -------------------------------------------
+dn: ou=usuarios,dc=farmaceutica,dc=local
+objectClass: organizationalUnit
+ou: usuarios
+description: Personal de FarmaVita
+
+dn: ou=grupos,dc=farmaceutica,dc=local
+objectClass: organizationalUnit
+ou: grupos
+description: Grupos de rol (RBAC)
+
+# --- Usuarios -----------------------------------------------------------
+# VLAN 210 - Almacén
+dn: uid=almacenista1,ou=usuarios,dc=farmaceutica,dc=local
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+objectClass: top
+uid: almacenista1
+cn: Almacenista Uno
+sn: Uno
+givenName: Almacenista
+mail: almacenista1@farmaceutica.local
+departmentNumber: VLAN210
+title: Almacenista
+userPassword: password_almacen_123
+
+# VLAN 220 - Ventas
+dn: uid=farmaceutico1,ou=usuarios,dc=farmaceutica,dc=local
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+objectClass: top
+uid: farmaceutico1
+cn: Farmaceutico Uno
+sn: Uno
+givenName: Farmaceutico
+mail: farmaceutico1@farmaceutica.local
+departmentNumber: VLAN220
+title: Farmaceutico de mostrador
+userPassword: password_ventas_123
+
+# VLAN 240 - Laboratorio
+dn: uid=laboratorista1,ou=usuarios,dc=farmaceutica,dc=local
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+objectClass: top
+uid: laboratorista1
+cn: Laboratorista Uno
+sn: Uno
+givenName: Laboratorista
+mail: laboratorista1@farmaceutica.local
+departmentNumber: VLAN240
+title: Analista de Control de Calidad
+userPassword: password_lab_123
+
+# VLAN 230 - Administración (usuario adicional para el rol admin)
+dn: uid=admin1,ou=usuarios,dc=farmaceutica,dc=local
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+objectClass: top
+uid: admin1
+cn: Administrador Uno
+sn: Uno
+givenName: Administrador
+mail: admin1@farmaceutica.local
+departmentNumber: VLAN230
+title: Administracion
+userPassword: password_admin_123
+
+# --- Grupos de rol ------------------------------------------------------
+dn: cn=almacen,ou=grupos,dc=farmaceutica,dc=local
+objectClass: groupOfNames
+objectClass: top
+cn: almacen
+description: Rol almacen - recepcion e ingreso de mercancia
+member: uid=almacenista1,ou=usuarios,dc=farmaceutica,dc=local
+
+dn: cn=ventas,ou=grupos,dc=farmaceutica,dc=local
+objectClass: groupOfNames
+objectClass: top
+cn: ventas
+description: Rol ventas - dispensacion de medicamentos
+member: uid=farmaceutico1,ou=usuarios,dc=farmaceutica,dc=local
+
+dn: cn=laboratorio,ou=grupos,dc=farmaceutica,dc=local
+objectClass: groupOfNames
+objectClass: top
+cn: laboratorio
+description: Rol laboratorio - control de calidad de lotes
+member: uid=laboratorista1,ou=usuarios,dc=farmaceutica,dc=local
+
+dn: cn=admin,ou=grupos,dc=farmaceutica,dc=local
+objectClass: groupOfNames
+objectClass: top
+cn: admin
+description: Rol admin - supervision y auditoria
+member: uid=admin1,ou=usuarios,dc=farmaceutica,dc=local
